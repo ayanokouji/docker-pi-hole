@@ -41,42 +41,61 @@ jobs:
       - name: Checkout Dummy Branch to set image name
         run: |
           git checkout -b ${{ github.event.inputs.name }}
-      - name: Run Tests
-        run: |
-          echo "Building ${ARCH}-${DEBIAN_VERSION}"
-          ./gh-actions-test.sh
-      - name: Push the ARCH image
-        if: github.event_name != 'pull_request'
-        run: |
-          . gh-actions-vars.sh
-          echo "${{ secrets.DOCKERHUB_PASS }}" | docker login --username="${{ secrets.DOCKERHUB_USER }}" --password-stdin
-          docker push "${ARCH_IMAGE}"
-      - name: Upload gh-workspace
-        if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v1
-        with:
-          name: gh-workspace
-          path: .gh-workspace
+      # - Temp disable tests because I know they work.. will uncomment once the publish section works. Maybe first time? Doubt!
+      # - name: Run Tests
+      #   run: |
+      #     echo "Building ${ARCH}-${DEBIAN_VERSION}"
+      #     ./gh-actions-test.sh
+      # - name: Push the ARCH image
+      #   if: github.event_name != 'pull_request'
+      #   run: |
+      #     . gh-actions-vars.sh
+      #     echo "${{ secrets.DOCKERHUB_PASS }}" | docker login --username="${{ secrets.DOCKERHUB_USER }}" --password-stdin
+      #     docker push "${ARCH_IMAGE}"
+      # - name: Upload gh-workspace
+      #   if: github.event_name != 'pull_request'
+      #   uses: actions/upload-artifact@v1
+      #   with:
+      #     name: gh-workspace
+      #     path: .gh-workspace
 
   publish:
-    runs-on: ubuntu-latest
     needs: test-and-build
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repo
+      -
+        name: Checkout
         uses: actions/checkout@v2
+      -
+        name: Set Up QEMU
+        uses: docker/setup-qemu-action@v1.2.0
+      -
+        name: Set Up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v1
+      -
+        name: Cache Docker Layers
+        uses: actions/cache@v2.1.6
         with:
-          ref: dev
-      - name: Checkout Dummy Branch to set image name
-        run: |
-          git checkout -b ${{ github.event.inputs.name }}
-      - name: Download workspace files
-        uses: actions/download-artifact@v1
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+      -
+        name: Build and push
+        id: docker_build
+        uses: docker/build-push-action@v2
         with:
-          name: gh-workspace
-          path: .gh-workspace
-      - name: Tag and Publish multi-arch images
-        env:
-          DOCKERHUB_PASS: ${{ secrets.DOCKERHUB_PASS }}
-          DOCKERHUB_USER: ${{ secrets.DOCKERHUB_USER }}
+          platforms: linux/amd64,linux/i386
+          builder: ${{ steps.buildx.outputs.name }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new
+          push: true
+      -
+        # Temp fix
+        # https://github.com/docker/build-push-action/issues/252
+        # https://github.com/moby/buildkit/issues/1896
+        name: Move cache
         run: |
-          ./gh-actions-deploy.sh
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
